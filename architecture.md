@@ -6,9 +6,57 @@ This document outlines the architectural design of the AI-Human Hybrid Customer 
 
 The system is designed to automate the initial stages of customer support while keeping a human expert in the loop for final approval. It integrates multiple communication channels, uses AI for ticket classification and drafting responses (using RAG), and provides a seamless interface for human agents to review and send replies.
 
-## 2. High-Level Workflow
+### High-Level System Map
+```mermaid
+graph TD
+    A[Customer Channels] --> B{n8n Orchestrator}
+    B --> C[Google Sheets - Data Logging]
+    B --> D[AI Engine - Gemini/RAG]
+    D --> E[Knowledge Base - Pinecone]
+    D --> F[Live Data - WooCommerce]
+    B --> G[Human Review - Slack]
+    G --> H[Final Response]
+    
+    style B fill:#f96,stroke:#333,stroke-width:2px
+    style D fill:#69f,stroke:#333,stroke-width:2px
+    style G fill:#6f9,stroke:#333,stroke-width:2px
+```
 
-The workflow is divided into three main stages:
+## 2. Detailed Workflow
+
+The workflow is divided into three main stages, ensuring data integrity, AI accuracy, and human oversight.
+
+### Full Operational Flow
+```mermaid
+graph LR
+    subgraph Stage1[Stage 1: Intake & Processing]
+    G1[Gmail] --> N[Normalize]
+    W1[WhatsApp] --> N
+    T1[Typeform] --> N
+    N --> V[Validate & De-duplicate]
+    V --> L1[Log to Sheets]
+    V --> AK[Auto-Ack to Customer]
+    end
+
+    subgraph Stage2[Stage 2: AI & RAG Analysis]
+    L1 --> AI[AI Support Agent]
+    AI <--> P1[Pinecone Knowledge Base]
+    AI <--> WC1[WooCommerce API]
+    AI --> AL[Log AI Reasoning]
+    end
+
+    subgraph Stage3[Stage 3: Human-in-the-Loop]
+    AI --> SL[Slack Notification]
+    SL -- Approve --> S1[Send Reply]
+    SL -- Edit --> EF[HTML Edit Form]
+    EF --> S1
+    S1 --> RS[Resolve & Log Resolution]
+    end
+    
+    style Stage1 fill:#f5f5f5,stroke:#333,stroke-dasharray: 5 5
+    style Stage2 fill:#e1f5fe,stroke:#01579b
+    style Stage3 fill:#e8f5e9,stroke:#2e7d32
+```
 
 ### Stage 1: Ticket Intake and Pre-processing
 *   **Triggers:** The system listens for new support requests from:
@@ -56,7 +104,23 @@ The system uses a Google Spreadsheet with the following sheets:
 
 ## 5. Error Handling & Observability
 
-A dedicated **Error Workflow** handles any failures within the main process:
+A dedicated **Error Workflow** handles any failures within the main process, ensuring high availability and notification of critical issues.
+
+### Error Resolution Flow
+```mermaid
+graph TD
+    E1[Node Failure] --> ET[Error Trigger]
+    ET --> FE[Format Error Context]
+    FE --> SC{Is Critical?}
+    SC -- Yes --> SL[Slack #support-errors]
+    SC -- Yes --> EM[Email Admin]
+    SC -- No --> SL
+    FE --> GS[Log to Error Log Sheet]
+    
+    style ET fill:#ffcdd2,stroke:#b71c1c
+    style SC fill:#fff9c4,stroke:#fbc02d
+```
+
 *   **Error Trigger:** Catches node failures.
 *   **Severity Assessment:** Categorizes errors as "CRITICAL" or "WARNING" based on the failed node (e.g., failures in sending replies are critical).
 *   **Multi-channel Alerts:** Sends notifications via Slack (#support-errors) and Email to the administrator.
