@@ -1,0 +1,252 @@
+{
+  "name": "Customer Support Ticket Management - Error Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "e5094fc6-5af2-42f4-8151-9789d7496bd1",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -960,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const err = $input.first().json;\nconst workflowName = err.workflow?.name || 'Unknown';\nconst nodeName     = err.execution?.lastNodeExecuted || 'Unknown Node';\nconst errorMsg     = err.execution?.error?.message || 'No message';\nconst errorStack   = err.execution?.error?.stack   || '';\nconst execId       = err.execution?.id  || 'N/A';\nconst execUrl      = err.execution?.url || '';\nconst timestamp    = new Date().toISOString();\n\n// CRITICAL: data integrity or customer-facing failures\nconst CRITICAL_NODES = [\n  'Log Ticket to Sheet', 'Update Ticket — AI Processed',\n  'Log to AI Log Sheet', 'Mark Ticket Resolved', 'Log Resolution',\n  'Send Reply via Email', 'Send Reply via WhatsApp',\n  'Send Email Ack', 'Send WhatsApp Ack'\n];\nconst isCritical = CRITICAL_NODES.includes(nodeName) ||\n  workflowName.includes('Flow 2') || workflowName.includes('Flow 3');\n\nconst severity = isCritical ? 'CRITICAL' : 'WARNING';\nconst emoji    = isCritical ? ':red_circle:' : ':warning:';\n\nconst criticalNote = isCritical\n  ? '\\n:exclamation: *Customer may not have received their reply or ticket may be unlogged. Check manually.*'\n  : '';\n\nconst slackText = [\n  `${emoji} *[${severity}] Support Workflow Error*`,\n  `*Workflow:* ${workflowName}`,\n  `*Node:* ${nodeName}`,\n  `*Error:* ${errorMsg}`,\n  `*Time:* ${timestamp}`,\n  execUrl ? `*Execution:* ${execUrl}` : '',\n  criticalNote\n].filter(Boolean).join('\\n');\n\nconst subject = `[${severity}] Support Error — ${workflowName} / ${nodeName}`;\nconst html = `<h2 style='color:${isCritical ? '#c0392b' : '#e67e22'}'>${severity} — Support Workflow Error</h2><table border='1' cellpadding='8' style='border-collapse:collapse;width:100%'><tr><td><b>Workflow</b></td><td>${workflowName}</td></tr><tr><td><b>Node</b></td><td>${nodeName}</td></tr><tr><td><b>Error</b></td><td style='color:#c0392b'>${errorMsg}</td></tr><tr><td><b>Execution</b></td><td>${execUrl ? '<a href=\"'+execUrl+'\">View</a>' : execId}</td></tr><tr><td><b>Time</b></td><td>${timestamp}</td></tr></table>${isCritical ? '<p style=\"color:#c0392b\"><b>Customer-facing impact possible. Check manually.</b></p>' : ''}${errorStack ? '<details><summary>Stack</summary><pre>'+errorStack+'</pre></details>' : ''}`;\n\nreturn [{ json: { subject, html, slack_text: slackText, severity, workflow_name: workflowName, node_name: nodeName, error_message: errorMsg, exec_id: execId, timestamp } }];"
+      },
+      "id": "5c376f66-265f-43c3-b354-1fa25e27c2f8",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -736,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU",
+          "mode": "list",
+          "cachedResultName": "AI-Human Hybrid Customer Support",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1749733606,
+          "mode": "list",
+          "cachedResultName": "Error Log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit#gid=1749733606"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.timestamp }}",
+            "Severity": "={{ $json.severity }}",
+            "Workflow": "={{ $json.workflow_name }}",
+            "Failed Node": "={{ $json.node_name }}",
+            "Error Message": "={{ $json.error_message }}",
+            "Execution ID": "={{ $json.exec_id }}",
+            "Status": "unresolved"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Severity",
+              "displayName": "Severity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Workflow",
+              "displayName": "Workflow",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Failed Node",
+              "displayName": "Failed Node",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Error Message",
+              "displayName": "Error Message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Execution ID",
+              "displayName": "Execution ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "9a6e5320-f960-401c-9123-4f9ec1135074",
+      "name": "Log Error to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -512,
+        -48
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VVym3egTu9EE5ra8",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "ksanu848@gmail.com",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "7dc2fff3-e267-4f07-a129-b40e7f7220c2",
+      "name": "Send Error Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        -512,
+        112
+      ],
+      "webhookId": "5efe8790-d1ed-4633-aee0-3ec3dd4b0809",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "OHQgwHhQBUqCSTOs",
+          "name": "tanisitech@gmail.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0AS3SU1HKM",
+          "mode": "list",
+          "cachedResultName": "customer-support-ticket-management"
+        },
+        "text": "={{ $json.slack_text }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        -512,
+        320
+      ],
+      "id": "3790998e-b87e-4320-9a1f-de0734ababa6",
+      "name": "Slack #support-errors",
+      "webhookId": "05120d97-fdfa-4407-ae49-8a01ebca7642",
+      "credentials": {
+        "slackApi": {
+          "id": "4qvC7OnRRv7VPzVg",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error": {
+      "main": [
+        [
+          {
+            "node": "Log Error to Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Error Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack #support-errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true,
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "856fd31a-e300-4a16-a600-406e462709cf",
+  "meta": {
+    "aiBuilderAssisted": true,
+    "templateCredsSetupCompleted": true,
+    "instanceId": "37ee74431af36e5f6e2177b0b6e0ba77f82f98e5f13559f1dbfcc6190c6b5601"
+  },
+  "id": "D1jfKw49MwT3a-38wbNfM",
+  "tags": [
+    {
+      "name": "Customer Support Ticket",
+      "id": "4mceyfyY4pgewdBI",
+      "updatedAt": "2026-04-13T07:52:32.358Z",
+      "createdAt": "2026-04-13T07:52:32.358Z"
+    }
+  ]
+}

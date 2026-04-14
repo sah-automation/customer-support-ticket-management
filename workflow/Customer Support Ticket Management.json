@@ -1,0 +1,2960 @@
+{
+  "name": "Customer Support Ticket Management",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {
+          "labelIds": [
+            "Label_4106275711682488997"
+          ],
+          "readStatus": "unread"
+        }
+      },
+      "id": "49aed054-5fbd-4e05-ab90-19f4146c3310",
+      "name": "Gmail Trigger — Support Inbox",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        -1248
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "OHQgwHhQBUqCSTOs",
+          "name": "tanisitech@gmail.com"
+        }
+      },
+      "notes": "Set up a dedicated support email address. Gmail trigger polls every minute for new unread emails."
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $input.first().json;\n\n// Parse \"Name <email>\" format\nlet customer_name = '';\nlet customer_email = '';\n\nif (msg.From) {\n  const match = msg.From.match(/(.*)<(.+)>/);\n  if (match) {\n    customer_name = match[1].trim();\n    customer_email = match[2].trim();\n  } else {\n    customer_email = msg.From; // fallback\n  }\n}\n\nreturn [{ json: {\n  source: 'gmail',\n  raw_subject:  msg.Subject || '(no subject)',\n  raw_body:     msg.text || msg.snippet || '',\n  customer_email,\n  customer_name,\n  raw_payload:  msg\n}}];"
+      },
+      "id": "8b55db35-487b-4ee1-a864-9cf722b4ce2b",
+      "name": "Extract Gmail Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        -1248
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const form = $input.first().json;\nconst answers = form.answers || [];\nconst getAnswer = (ref) => answers.find(a => a.field?.ref === ref)?.text\n  || answers.find(a => a.field?.ref === ref)?.email\n  || answers.find(a => a.field?.ref === ref)?.choice?.label\n  || '';\nreturn [{ json: {\n  source: 'typeform',\n  raw_subject:    getAnswer('subject') || 'Support Request',\n  raw_body:       getAnswer('message') || '',\n  customer_email: getAnswer('email') || form.hidden?.email || '',\n  customer_name:  getAnswer('name') || '',\n  order_number:   getAnswer('order_number') || '',\n  raw_payload:    form\n}}];"
+      },
+      "id": "0c732318-98e3-4f22-a432-5a1f39eb3a7c",
+      "name": "Extract Typeform Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        -864
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $input.first().json;\nconst msg = payload.entry?.[0]?.changes?.[0]?.value;\nconst message = msg?.messages?.[0];\nconst contact = msg?.contacts?.[0];\nif (!message || message.type !== 'text') {\n  return [{ json: { skip: true, reason: 'Non-text WhatsApp message — ignored' } }];\n}\nreturn [{ json: {\n  source: 'whatsapp',\n  raw_subject:    'WhatsApp Support Message',\n  raw_body:       message.text?.body || '',\n  customer_email: '',\n  customer_name:  contact?.profile?.name || 'WhatsApp User',\n  customer_phone: message.from || '',\n  whatsapp_msg_id: message.id,\n  whatsapp_phone_id: msg?.metadata?.phone_number_id,\n  raw_payload:    payload\n}}];"
+      },
+      "id": "c3c42795-6620-4f35-8538-a6e32d82b4ea",
+      "name": "Extract WhatsApp Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-ticket",
+        "options": {}
+      },
+      "id": "dc2b9d37-dfa2-4cf9-a5e7-437f91101a9a",
+      "name": "Tally / Generic Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        -1056
+      ],
+      "webhookId": "support-ticket-webhook",
+      "notes": "Generic endpoint for Tally, custom apps, or any HTTP source.\nExpected POST body (JSON): { source, subject, body, customer_email, customer_name, order_number }\nFor Tally specifically: parse fields array as in inventory project."
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst source = body.source || 'webhook';\n\n// Handle Tally's nested fields array\nif (body.data?.fields) {\n  const fields = body.data.fields;\n  const getField = (label) => fields.find(f => f.label === label);\n  const resolveDropdown = (f) => {\n    if (!f) return '';\n    if (f.type === 'DROPDOWN' && f.options) {\n      const sel = Array.isArray(f.value) ? f.value[0] : f.value;\n      return f.options.find(o => o.id === sel)?.text || '';\n    }\n    return f.value || '';\n  };\n  return [{ json: {\n    source: 'tally',\n    raw_subject:    resolveDropdown(getField('Subject')) || 'Tally Support Request',\n    raw_body:       resolveDropdown(getField('Message')) || resolveDropdown(getField('Description')) || '',\n    customer_email: resolveDropdown(getField('Email')) || resolveDropdown(getField('Your email')) || '',\n    customer_name:  resolveDropdown(getField('Name')) || resolveDropdown(getField('Your name')) || '',\n    order_number:   resolveDropdown(getField('Order Number')) || '',\n    raw_payload:    body\n  }}];\n}\n\n// Generic flat JSON\nreturn [{ json: {\n  source,\n  raw_subject:    body.subject || 'Support Request',\n  raw_body:       body.body || body.message || body.description || '',\n  customer_email: body.customer_email || body.email || '',\n  customer_name:  body.customer_name || body.name || '',\n  order_number:   body.order_number || '',\n  raw_payload:    body\n}}];"
+      },
+      "id": "30d290ff-406c-48b3-8cfd-cfe1cbfdbad5",
+      "name": "Extract Webhook Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        -1056
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── NORMALISE: unify all sources into one standard ticket schema ──\nconst raw = $input.first().json;\n\n// Skip signal from WhatsApp non-text messages\nif (raw.skip) {\n  return [{ json: { skip: true, reason: raw.reason } }];\n}\n\n// Validation\nif (!raw.raw_body || raw.raw_body.trim().length < 3) {\n  throw new Error(`Empty or too-short message body from ${raw.source}. Cannot create ticket.`);\n}\n\n// Generate ticket ID: SOURCE-TIMESTAMP-RANDOM\nconst ts = Date.now();\nconst rand = Math.random().toString(36).slice(2, 6).toUpperCase();\nconst sourceCode = (raw.source || 'WEB').slice(0, 3).toUpperCase();\nconst ticketId = `${sourceCode}-${ts}-${rand}`;\n\n// Sanitise text — strip HTML tags if from email\nconst stripHtml = (str) => str.replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\nconst cleanBody = stripHtml(raw.raw_body || '').slice(0, 4000);\nconst cleanSubject = stripHtml(raw.raw_subject || 'Support Request').slice(0, 200);\n\nreturn [{ json: {\n  skip: false,\n  ticket_id:      ticketId,\n  source:         raw.source,\n  subject:        cleanSubject,\n  body:           cleanBody,\n  customer_email: (raw.customer_email || '').toLowerCase().trim(),\n  customer_name:  (raw.customer_name || 'Unknown').trim(),\n  customer_phone: raw.customer_phone || '',\n  order_number:   raw.order_number || '',\n  whatsapp_msg_id:    raw.whatsapp_msg_id || '',\n  whatsapp_phone_id:  raw.whatsapp_phone_id || '',\n  status:         'new',\n  urgency:        null,\n  category:       null,\n  received_at:    new Date().toISOString()\n}}];"
+      },
+      "id": "d4fcf04b-2ec9-4e31-a419-ba88b4080a46",
+      "name": "Normalise Ticket",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        -960
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "skip-check",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "54f106f6-7ff9-46d7-8ce2-d63a7415e641",
+      "name": "Valid Ticket?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        288,
+        -960
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "f187aadf-022b-43a3-87e2-b970b32f4239",
+      "name": "Skip — Invalid or Non-Text",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        576,
+        -784
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU",
+          "mode": "list",
+          "cachedResultName": "AI-Human Hybrid Customer Support",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Tickets",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "2111a153-c672-403b-ace9-c0073bb05fba",
+      "name": "Read Recent Tickets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        576,
+        -976
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VVym3egTu9EE5ra8",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Duplicate detection: same customer + similar subject in last 24h\nconst ticket = $('Normalise Ticket').item.json;\nconst rows = $('Read Recent Tickets').all();\nconst cutoff = Date.now() - 24 * 3600 * 1000;\n\nconst isDuplicate = rows.some(r => {\n  const sameCustomer = r.json['Customer Email'] &&\n    r.json['Customer Email'].toLowerCase() === ticket.customer_email.toLowerCase();\n  const recent = new Date(r.json['Received At'] || 0).getTime() > cutoff;\n  const openStatus = ['new','open','in_progress'].includes((r.json.Status || '').toLowerCase());\n  return sameCustomer && recent && openStatus;\n});\n\nreturn [{ json: { ...ticket, is_duplicate: isDuplicate } }];"
+      },
+      "id": "b1fbe9d3-189e-4667-bc0e-5f59829b7309",
+      "name": "Check Duplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        -976
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU",
+          "mode": "list",
+          "cachedResultName": "AI-Human Hybrid Customer Support",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Tickets",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Ticket ID": "={{ $json.ticket_id }}",
+            "Source": "={{ $json.source }}",
+            "Subject": "={{ $json.subject }}",
+            "Body": "={{ $json.body }}",
+            "Customer Email": "={{ $json.customer_email }}",
+            "Customer Name": "={{ $json.customer_name }}",
+            "Customer Phone": "={{ $json.customer_phone }}",
+            "Order Number": "={{ $json.order_number }}",
+            "Status": "new",
+            "Duplicate": "={{ $json.is_duplicate ? 'YES' : 'NO' }}",
+            "Received At": "={{ $json.received_at }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Ticket ID",
+              "displayName": "Ticket ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Subject",
+              "displayName": "Subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Body",
+              "displayName": "Body",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Email",
+              "displayName": "Customer Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Name",
+              "displayName": "Customer Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Phone",
+              "displayName": "Customer Phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Order Number",
+              "displayName": "Order Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Urgency",
+              "displayName": "Urgency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Duplicate",
+              "displayName": "Duplicate",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Received At",
+              "displayName": "Received At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "3aa0dcbb-56a8-47c1-aeea-953d59b7e2bb",
+      "name": "Log Ticket to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1120,
+        -1168
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VVym3egTu9EE5ra8",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Send acknowledgement back to customer via original channel\nconst ticket = $input.first().json;\nconst ackBody = `Hi ${ticket.customer_name || 'there'},\\n\\nThank you for reaching out. We have received your support request and assigned it ticket ID: ${ticket.ticket_id}.\\n\\nWe will respond within 24 hours.\\n\\nIf this is urgent, please reply with the word URGENT and your ticket will be prioritised.\\n\\nThank you,\\nSupport Team`;\n\nreturn [{ json: { ...ticket, ack_message: ackBody } }];"
+      },
+      "id": "91d0cabf-e6f3-4a03-b992-e04bced07d7f",
+      "name": "Build Ack Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -976
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "has-email",
+              "leftValue": "={{ $json.customer_email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "051591d4-8068-4e75-8c26-8d1c60438574",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1376,
+        -976
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.customer_email }}",
+        "subject": "=[Support #{{ $json.ticket_id }}] We received your message",
+        "emailType": "text",
+        "message": "={{ $json.ack_message }}",
+        "options": {}
+      },
+      "id": "5858dab0-9814-47a6-b5ea-3013d755e5d9",
+      "name": "Send Email Ack",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        -1088
+      ],
+      "webhookId": "a8fe6aa2-b7b4-41da-8370-5f70dca7b607",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "OHQgwHhQBUqCSTOs",
+          "name": "tanisitech@gmail.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "={{ $json.whatsapp_phone_id }}",
+        "recipientPhoneNumber": "={{ $json.customer_phone }}",
+        "textBody": "={{ $json.ack_message }}",
+        "additionalFields": {}
+      },
+      "id": "4088d3b3-f270-4d37-b33f-c48e5ea8a057",
+      "name": "Send WhatsApp Ack",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        1616,
+        -864
+      ],
+      "webhookId": "5454ee3b-1795-45b9-9927-2ce249fa31cc",
+      "disabled": true,
+      "notes": "Only fires if source=whatsapp and phone ID is present"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "not-duplicate",
+              "leftValue": "={{ $json.is_duplicate }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4bfc99fb-856e-43be-b891-04a60aa9c871",
+      "name": "Is New (not duplicate)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1856,
+        -992
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ticket = $('Normalise Ticket').first().json;\nif (!ticket.ticket_id) {\n  throw new Error('Flow 2 received empty ticket — missing ticket_id. Check Flow 1 trigger.');\n}\nif (!ticket.body || ticket.body.trim().length < 3) {\n  throw new Error(`Ticket ${ticket.ticket_id} has empty body — cannot process with AI.`);\n}\n// Compose the full prompt input for the AI agent\nconst agentInput = [\n  `TICKET ID: ${ticket.ticket_id}`,\n  `SOURCE: ${ticket.source}`,\n  `CUSTOMER: ${ticket.customer_name} <${ticket.customer_email || ticket.customer_phone}>`,\n  `SUBJECT: ${ticket.subject}`,\n  ticket.order_number ? `ORDER NUMBER: ${ticket.order_number}` : '',\n  `MESSAGE:\\n${ticket.body}`\n].filter(Boolean).join('\\n');\n\nreturn [{ json: { ...ticket, agent_input: agentInput } }];"
+      },
+      "id": "1bab1cfd-9840-4a3d-8a8a-9e0be0112fe9",
+      "name": "Validate & Prepare Agent Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        -1120
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.agent_input }}",
+        "options": {
+          "systemMessage": "You are a professional customer support agent for an ecommerce WooCommerce store. Your job is to:\n\n1. CLASSIFY the ticket into one of these categories: order_status, refund_request, product_question, shipping_issue, account_issue, payment_issue, general_inquiry, complaint, other\n\n2. ASSIGN urgency level:\n   - 1 (Critical): payment failed, package lost, fraud concern, order not delivered >5 days past ETA\n   - 2 (High): refund request, order issue, product defective\n   - 3 (Normal): general questions, product info, account help\n\n3. LOOK UP relevant information using your tools:\n   - If an order number is mentioned, use the WooCommerce Orders tool to check order status\n   - If a product is mentioned, use the WooCommerce Products tool to check availability/details\n   - Always search the Support Knowledge Base for relevant policies and instructions\n\n4. DRAFT a reply that:\n   - Addresses the specific issue using facts from your tools\n   - Follows the tone and policies from the Support Knowledge Base\n   - Is professional, empathetic, and concise (150-250 words)\n   - Includes specific details (order status, tracking, etc.) if available\n   - Never makes up information — if you don't know, say so and offer to escalate\n\n5. OUTPUT valid JSON only (no markdown, no extra text):\n{\n  \"category\": \"<category>\",\n  \"urgency\": <1|2|3>,\n  \"urgency_reason\": \"<one sentence explaining urgency level>\",\n  \"tools_used\": [\"<tool names used>\"],\n  \"facts_found\": \"<key facts retrieved from tools, or 'none'>\",\n  \"draft_reply\": \"<full reply text ready to send to customer>\",\n  \"suggested_subject\": \"<email subject line if replying via email>\",\n  \"needs_escalation\": <true|false>,\n  \"escalation_reason\": \"<reason if needs_escalation is true, else null>\",\n  \"confidence\": <0.0-1.0>\n}",
+          "maxIterations": 10
+        }
+      },
+      "id": "8f30a9df-e0db-4584-9bc1-98dccfe8a887",
+      "name": "AI Support Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.6,
+      "position": [
+        2752,
+        -1120
+      ]
+    },
+    {
+      "parameters": {
+        "contextWindowLength": 10
+      },
+      "id": "63de0c50-95e0-45d0-ae92-e93d3bc1b088",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1,
+      "position": [
+        2944,
+        -816
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolName": "support_knowledge_base",
+        "toolDescription": "Search the support knowledge base for policies, refund rules, escalation criteria, product FAQs, and support instructions. Use this for any question about how to handle a support case, what policy applies, or what information to give customers.",
+        "pineconeIndex": {
+          "__rl": true,
+          "value": "ske-customer-support-n8n",
+          "mode": "list",
+          "cachedResultName": "ske-customer-support-n8n"
+        },
+        "options": {}
+      },
+      "id": "58fc2e1a-b970-449a-8588-d2151aa6b1fe",
+      "name": "Pinecone — Support KB",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePinecone",
+      "typeVersion": 1,
+      "position": [
+        3104,
+        -816
+      ],
+      "credentials": {
+        "pineconeApi": {
+          "id": "WpdNHllafiyQuyqJ",
+          "name": "PineconeApi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://sahkitchenequipment.com/wp-json/wc/v3/products?search={{ encodeURIComponent($fromAI('product_query')) }}&per_page=3",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "wooCommerceApi"
+      },
+      "id": "846495ce-c294-49a6-823d-356a2bdff3a3",
+      "name": "Tool — WooCommerce Product Search",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [
+        3632,
+        -816
+      ],
+      "credentials": {
+        "wooCommerceApi": {
+          "id": "qpVE8B0a04QnMPQV",
+          "name": "SAH Kitchen Woo"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://sahkitchenequipment.com/wp-json/wc/v3/orders?email={{ encodeURIComponent($fromAI('customer_email')) }}&per_page=5&orderby=date&order=desc",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "wooCommerceApi"
+      },
+      "id": "36d14409-9198-49e1-8a34-61185fcf03d5",
+      "name": "Tool — Customer Order History",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [
+        3840,
+        -816
+      ],
+      "credentials": {
+        "wooCommerceApi": {
+          "id": "qpVE8B0a04QnMPQV",
+          "name": "SAH Kitchen Woo"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ticket = $('Validate & Prepare Agent Input').item.json;\nconst agentOutput = $input.first().json.output || $input.first().json;\n\n// Parse the AI's JSON output safely\nlet parsed = {};\ntry {\n  const raw = typeof agentOutput === 'string' ? agentOutput : JSON.stringify(agentOutput);\n  const cleaned = raw.replace(/```json|```/g, '').trim();\n  parsed = JSON.parse(cleaned);\n} catch(e) {\n  // If parsing fails, treat the raw output as the draft reply\n  parsed = {\n    category: 'general_inquiry',\n    urgency: 3,\n    urgency_reason: 'Could not parse structured output — defaulting to normal urgency',\n    tools_used: [],\n    facts_found: 'none',\n    draft_reply: typeof agentOutput === 'string' ? agentOutput : 'Unable to generate response. Please review manually.',\n    suggested_subject: `Re: ${ticket.subject}`,\n    needs_escalation: false,\n    escalation_reason: null,\n    confidence: 0.0\n  };\n}\n\n// Validate required fields\nconst urgency = parseInt(parsed.urgency) || 3;\nconst category = parsed.category || 'general_inquiry';\nconst draftReply = parsed.draft_reply || 'No draft generated.';\n\nconst N8N_BASE_URL = 'https://YOUR_N8N_DOMAIN';\nconst encodedData = encodeURIComponent(JSON.stringify({\n  ticket_id: ticket.ticket_id,\n  source: ticket.source,\n  customer_email: ticket.customer_email,\n  customer_name: ticket.customer_name,\n  customer_phone: ticket.customer_phone,\n  whatsapp_phone_id: ticket.whatsapp_phone_id,\n  whatsapp_msg_id: ticket.whatsapp_msg_id,\n  subject: ticket.subject,\n  draft_reply: draftReply,\n  suggested_subject: parsed.suggested_subject || `Re: ${ticket.subject}`,\n  urgency,\n  category\n}));\n\nconst sendUrl     = `${N8N_BASE_URL}/webhook/support-action?action=send&data=${encodedData}`;\nconst editUrl     = `${N8N_BASE_URL}/webhook/support-action?action=edit&data=${encodedData}`;\nconst escalateUrl = `${N8N_BASE_URL}/webhook/support-action?action=escalate&data=${encodedData}`;\n\nconst urgencyEmoji = { 1: ':red_circle:', 2: ':large_yellow_circle:', 3: ':white_circle:' };\nconst channelLabel = { gmail: 'Email', typeform: 'Form', whatsapp: 'WhatsApp', tally: 'Tally', webhook: 'API' };\n\nconst slackMsg = [\n  `${urgencyEmoji[urgency] || ':white_circle:'} *New Support Ticket* — Urgency ${urgency} | ${category.replace(/_/g, ' ')}`,\n  `*Ticket:* \\`${ticket.ticket_id}\\` via ${channelLabel[ticket.source] || ticket.source}`,\n  `*Customer:* ${ticket.customer_name}${ticket.customer_email ? ' (' + ticket.customer_email + ')' : ''}`,\n  `*Subject:* ${ticket.subject}`,\n  parsed.facts_found && parsed.facts_found !== 'none' ? `*Context found:* ${parsed.facts_found}` : '',\n  parsed.needs_escalation ? `\\n:rotating_light: *AI recommends escalation:* ${parsed.escalation_reason}` : '',\n  `\\n*AI Draft Reply:*\\n\\`\\`\\`${draftReply.slice(0, 800)}${draftReply.length > 800 ? '...' : ''}\\`\\`\\``,\n  `\\n<${sendUrl}|Send as-is> | <${editUrl}|Edit &amp; send> | <${escalateUrl}|Escalate>`\n].filter(Boolean).join('\\n');\n\nreturn [{\n  json: {\n    ...ticket,\n    urgency,\n    category,\n    urgency_reason:    parsed.urgency_reason || '',\n    tools_used:        parsed.tools_used || [],\n    facts_found:       parsed.facts_found || 'none',\n    draft_reply:       draftReply,\n    suggested_subject: parsed.suggested_subject || `Re: ${ticket.subject}`,\n    needs_escalation:  !!parsed.needs_escalation,\n    escalation_reason: parsed.escalation_reason || null,\n    confidence:        parsed.confidence || 0,\n    slack_msg:         slackMsg,\n    processed_at:      new Date().toISOString()\n  }\n}];"
+      },
+      "id": "deb483b6-0f66-4b18-ae25-1cc793718893",
+      "name": "Parse Agent Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        -1120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU",
+          "mode": "list",
+          "cachedResultName": "AI-Human Hybrid Customer Support",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Tickets",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status": "ai_processed",
+            "Urgency": "={{ $json.urgency }}",
+            "Category": "={{ $json.category }}",
+            "row_number": 0
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Ticket ID",
+              "displayName": "Ticket ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Subject",
+              "displayName": "Subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Body",
+              "displayName": "Body",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Customer Email",
+              "displayName": "Customer Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Customer Name",
+              "displayName": "Customer Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Customer Phone",
+              "displayName": "Customer Phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Order Number",
+              "displayName": "Order Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Urgency",
+              "displayName": "Urgency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Duplicate",
+              "displayName": "Duplicate",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Received At",
+              "displayName": "Received At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "f36eb9b1-77b0-4341-8de0-b99423342b59",
+      "name": "Update Ticket — AI Processed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        3504,
+        -1376
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VVym3egTu9EE5ra8",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU",
+          "mode": "list",
+          "cachedResultName": "AI-Human Hybrid Customer Support",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 323298893,
+          "mode": "list",
+          "cachedResultName": "AI Log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit#gid=323298893"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Ticket ID": "={{ $json.ticket_id }}",
+            "Category": "={{ $json.category }}",
+            "Urgency": "={{ $json.urgency }}",
+            "Urgency Reason": "={{ $json.urgency_reason }}",
+            "Tools Used": "={{ $json.tools_used.join(', ') }}",
+            "Facts Found": "={{ $json.facts_found }}",
+            "Draft Reply": "={{ $json.draft_reply }}",
+            "Needs Escalation": "={{ $json.needs_escalation ? 'YES' : 'NO' }}",
+            "Confidence": "={{ $json.confidence }}",
+            "Processed At": "={{ $json.processed_at }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Ticket ID",
+              "displayName": "Ticket ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Urgency",
+              "displayName": "Urgency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Urgency Reason",
+              "displayName": "Urgency Reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tools Used",
+              "displayName": "Tools Used",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Facts Found",
+              "displayName": "Facts Found",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Draft Reply",
+              "displayName": "Draft Reply",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Needs Escalation",
+              "displayName": "Needs Escalation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Confidence",
+              "displayName": "Confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Processed At",
+              "displayName": "Processed At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "e333bb75-3fed-4877-8770-d4aabff30ce3",
+      "name": "Log to AI Log Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        4080,
+        -1392
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VVym3egTu9EE5ra8",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-critical",
+              "leftValue": "={{ $json.urgency }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c461185e-3409-4209-ad1c-3998d6ee466f",
+      "name": "Is Critical (Urgency 1)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3872,
+        -1216
+      ]
+    },
+    {
+      "parameters": {
+        "path": "support-action",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "89ffe9a6-8b31-4d46-95e1-52247d7bafbc",
+      "name": "Action Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -288,
+        128
+      ],
+      "webhookId": "support-action-webhook",
+      "notes": "Receives clicks from Slack buttons: send, edit, escalate. Set unfurl_links:false on the Slack node in Flow 2."
+    },
+    {
+      "parameters": {
+        "jsCode": "const query = $input.first().json.query || {};\nconst action = (query.action || '').toLowerCase();\n\nif (!['send','edit','escalate'].includes(action)) {\n  throw new Error(`Invalid support action: \"${action}\". Expected: send, edit, escalate`);\n}\nif (!query.data) {\n  throw new Error('Missing ticket data in action URL');\n}\n\nlet ticketData = {};\ntry {\n  ticketData = JSON.parse(decodeURIComponent(query.data));\n} catch(e) {\n  throw new Error(`Could not parse ticket data from URL: ${e.message}`);\n}\n\nif (!ticketData.ticket_id) {\n  throw new Error('Ticket data missing ticket_id');\n}\n\nreturn [{\n  json: {\n    action,\n    ticket_id:         ticketData.ticket_id,\n    source:            ticketData.source,\n    customer_email:    ticketData.customer_email,\n    customer_name:     ticketData.customer_name,\n    customer_phone:    ticketData.customer_phone,\n    whatsapp_phone_id: ticketData.whatsapp_phone_id,\n    subject:           ticketData.subject,\n    draft_reply:       ticketData.draft_reply,\n    suggested_subject: ticketData.suggested_subject,\n    urgency:           ticketData.urgency,\n    category:          ticketData.category,\n    actioned_at:       new Date().toISOString()\n  }\n}];"
+      },
+      "id": "9ffcbd9f-0c80-4667-b8e8-c7148c7f72d5",
+      "name": "Parse Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "send",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "send",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "send"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "edit",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "edit",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "edit"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "escalate",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "escalate",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "escalate"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4c56d009-7b96-49d6-bc2b-aeeda6ba48df",
+      "name": "Route Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        144,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Determine send channel from source\nconst ticket = $input.first().json;\nreturn [{ json: { ...ticket, send_channel: ticket.source, modified: false } }];"
+      },
+      "id": "953eaaf4-6797-4f5d-9a92-85a68409be82",
+      "name": "Prepare Send (as-is)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        368,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "html",
+        "options": {}
+      },
+      "id": "76a58fb1-9871-4155-a1cd-61eb931bad83",
+      "name": "Respond — Edit Form",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        368,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-edit-submit",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "251fd930-9410-4d5f-83a4-74e6a5006f8b",
+      "name": "Edit Submit Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        368,
+        288
+      ],
+      "webhookId": "support-edit-submit-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nif (!body.ticket_id || !body.reply_body) {\n  throw new Error('Edit submit missing ticket_id or reply_body');\n}\nreturn [{ json: {\n  action: 'send',\n  modified: true,\n  ticket_id:         body.ticket_id,\n  source:            body.source,\n  customer_email:    body.customer_email,\n  customer_name:     body.customer_name,\n  customer_phone:    body.customer_phone,\n  whatsapp_phone_id: body.whatsapp_phone_id,\n  draft_reply:       body.reply_body,\n  suggested_subject: body.reply_subject || body.suggested_subject || 'Re: Your support request',\n  send_channel:      body.source,\n  actioned_at:       new Date().toISOString()\n}}];"
+      },
+      "id": "66077b1a-08e4-41a0-9a67-dc774ffacafd",
+      "name": "Parse Edited Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-email",
+              "leftValue": "={{ ['gmail','typeform','tally','webhook'].includes($json.send_channel) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e418d207-9215-4897-bb80-93fe6b47695b",
+      "name": "Send via Email or WhatsApp?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        848,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.customer_email }}",
+        "subject": "={{ $json.suggested_subject }}",
+        "emailType": "text",
+        "message": "={{ $json.draft_reply }}",
+        "options": {}
+      },
+      "id": "d0c02614-648e-43e0-9d06-d91b00685713",
+      "name": "Send Reply via Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        16
+      ],
+      "webhookId": "f654c02c-0e34-4af0-a10b-19e431492005",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "OHQgwHhQBUqCSTOs",
+          "name": "tanisitech@gmail.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "={{ $json.whatsapp_phone_id }}",
+        "recipientPhoneNumber": "={{ $json.customer_phone }}",
+        "textBody": "={{ $json.draft_reply }}",
+        "additionalFields": {}
+      },
+      "id": "bbc1e482-66f8-421a-b0d8-f299667ac1d7",
+      "name": "Send Reply via WhatsApp",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        1072,
+        192
+      ],
+      "webhookId": "ee8da2c8-ee01-4615-a6ba-2921e8663581",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU",
+          "mode": "list",
+          "cachedResultName": "AI-Human Hybrid Customer Support",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Tickets",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status": "Resolved"
+          },
+          "matchingColumns": [
+            "Ticket ID"
+          ],
+          "schema": [
+            {
+              "id": "Ticket ID",
+              "displayName": "Ticket ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Subject",
+              "displayName": "Subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Body",
+              "displayName": "Body",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Email",
+              "displayName": "Customer Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Name",
+              "displayName": "Customer Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Phone",
+              "displayName": "Customer Phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Order Number",
+              "displayName": "Order Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Urgency",
+              "displayName": "Urgency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Duplicate",
+              "displayName": "Duplicate",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Received At",
+              "displayName": "Received At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "40b03a66-25e9-45ba-9221-97295ddfd8a3",
+      "name": "Mark Ticket Resolved",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1456,
+        96
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VVym3egTu9EE5ra8",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU",
+          "mode": "list",
+          "cachedResultName": "AI-Human Hybrid Customer Support",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 2016758438,
+          "mode": "list",
+          "cachedResultName": "Resolutions",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit#gid=2016758438"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Ticket ID": "={{ $json.ticket_id }}",
+            "Channel Sent": "={{ $json.send_channel }}",
+            "Customer": "={{ $json.customer_email || $json.customer_phone }}",
+            "Reply Modified": "={{ $json.modified ? 'YES' : 'NO' }}",
+            "Resolved At": "={{ $json.actioned_at }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Ticket ID",
+              "displayName": "Ticket ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Channel Sent",
+              "displayName": "Channel Sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer",
+              "displayName": "Customer",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Reply Modified",
+              "displayName": "Reply Modified",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Resolved At",
+              "displayName": "Resolved At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "3680f14f-b7b1-48da-88a3-ff79ab3efff6",
+      "name": "Log Resolution",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1456,
+        288
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VVym3egTu9EE5ra8",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "html",
+        "options": {}
+      },
+      "id": "29f43a09-aa4b-41de-9130-b949be7d854c",
+      "name": "Respond — Reply Sent",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1456,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU",
+          "mode": "list",
+          "cachedResultName": "AI-Human Hybrid Customer Support",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Tickets",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GawKExhOL9W63tdUCwHzJ3sdwGOlH9eG-Y0ei4bKUEU/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status": "Escalated"
+          },
+          "matchingColumns": [
+            "Ticket ID"
+          ],
+          "schema": [
+            {
+              "id": "Ticket ID",
+              "displayName": "Ticket ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Subject",
+              "displayName": "Subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Body",
+              "displayName": "Body",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Email",
+              "displayName": "Customer Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Name",
+              "displayName": "Customer Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Phone",
+              "displayName": "Customer Phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Order Number",
+              "displayName": "Order Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Urgency",
+              "displayName": "Urgency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Duplicate",
+              "displayName": "Duplicate",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Received At",
+              "displayName": "Received At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "6492f19d-64a0-4744-b484-9c76f7d0e740",
+      "name": "Mark Ticket Escalated",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        608,
+        480
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VVym3egTu9EE5ra8",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "html",
+        "options": {}
+      },
+      "id": "7409accc-26a5-4703-8607-cfd5c65ff8fc",
+      "name": "Respond — Escalated",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        848,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "dataType": "binary",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "file-name",
+                "value": "={{ $('Download Support Doc from Drive').item.json.name }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "fb5b456e-cac4-4c1e-a454-60c9ceda1622",
+      "name": "Default Data Loader",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1,
+      "position": [
+        3888,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "chunkSize": 500,
+        "chunkOverlap": 100,
+        "options": {}
+      },
+      "id": "6734956b-0c72-4d33-ac0e-c16239d5a73a",
+      "name": "Recursive Character Splitter",
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        3888,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "pineconeIndex": {
+          "__rl": true,
+          "value": "ske-customer-support-n8n",
+          "mode": "list",
+          "cachedResultName": "ske-customer-support-n8n"
+        },
+        "options": {}
+      },
+      "id": "5bc7059d-ced2-48b4-bf9e-97cf3275a717",
+      "name": "Pinecone — Upsert Documents",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePinecone",
+      "typeVersion": 1,
+      "position": [
+        3696,
+        0
+      ],
+      "credentials": {
+        "pineconeApi": {
+          "id": "WpdNHllafiyQuyqJ",
+          "name": "PineconeApi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0AS3SU1HKM",
+          "mode": "list",
+          "cachedResultName": "customer-support-ticket-management"
+        },
+        "text": "=:repeat: *Duplicate ticket suppressed* — Ticket `{{ $json.ticket_id }}` from {{ $json.customer_email }} appears to be a duplicate of an open ticket. Logged but not sent to AI.",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        2080,
+        -800
+      ],
+      "id": "c4d14188-c015-4b51-a2a3-2f65dbe46044",
+      "name": "Slack — Duplicate Notice",
+      "webhookId": "82d1ffba-d0ef-4369-9748-18017b1550d5",
+      "credentials": {
+        "slackApi": {
+          "id": "4qvC7OnRRv7VPzVg",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "formId": "YOUR_TYPEFORM_FORM_ID"
+      },
+      "id": "d1d6a826-bf53-4708-a347-0bc492b6c146",
+      "name": "Typeform Trigger",
+      "type": "n8n-nodes-base.typeformTrigger",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        -864
+      ],
+      "webhookId": "7c8d1aa1-2e3b-46db-b3b0-7707e05a4ba9",
+      "disabled": true,
+      "notes": "Create a Typeform with fields: Name, Email, Subject, Message, Order Number (optional)"
+    },
+    {
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
+      "id": "13a7fbb9-14e6-45e0-b79a-eaaf508473e4",
+      "name": "WhatsApp Trigger",
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        -640
+      ],
+      "webhookId": "c1736c93-906d-4777-b020-9baad855b02b",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "SRQmzqsm12rBfDRq",
+          "name": "WhatsApp OAuth account"
+        }
+      },
+      "disabled": true,
+      "notes": "Requires WhatsApp Business API (Meta). Set webhook URL in Meta developer console."
+    },
+    {
+      "parameters": {
+        "content": "## Step 1\n**Customer Ticket Intake and Processing for AI Agent**",
+        "height": 1168,
+        "width": 3072,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -736,
+        -1504
+      ],
+      "id": "f38c3a45-8c96-4e1f-b154-0274d25a9966",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Step 2\n**AI Agent identify the ticket, generate the updated and real time response, and generate response for further human approval**",
+        "height": 1168,
+        "width": 2512
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2336,
+        -1504
+      ],
+      "id": "a1e1384f-831e-4664-b0e4-fa4b8ee20697",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        2544,
+        -656
+      ],
+      "id": "d203b4c6-0c99-4a2a-8c29-90ef7358b283",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Ah3AyC6bmcvPBNXi",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0AS3SU1HKM",
+          "mode": "list",
+          "cachedResultName": "customer-support-ticket-management"
+        },
+        "text": "=:rotating_light: *CRITICAL TICKET — Immediate attention required*\\n*Ticket:* `{{ $json.ticket_id }}`\\n*Customer:* {{ $json.customer_name }} ({{ $json.customer_email }})\\n*Subject:* {{ $json.subject }}\\n*Reason:* {{ $json.urgency_reason }}\\nThis ticket has been posted to #support-review. Please action immediately.",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        4368,
+        -1232
+      ],
+      "id": "55105bf9-1381-4fc9-878a-482d98e1286c",
+      "name": "Slack #support-escalations (Critical)",
+      "webhookId": "7313060f-b9d8-4a69-a24c-b4c0291a0526",
+      "credentials": {
+        "slackApi": {
+          "id": "4qvC7OnRRv7VPzVg",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Step 3\n**Human-in-the-Loop finalize the response**",
+        "height": 1088,
+        "width": 3120,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -736,
+        -240
+      ],
+      "id": "7a4079b6-7ac6-4044-b672-eb91beff13aa",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0AS3SU1HKM",
+          "mode": "list",
+          "cachedResultName": "customer-support-ticket-management"
+        },
+        "text": "=:rotating_light: *Manual Escalation* — Ticket `{{ $json.ticket_id }}` escalated by agent\\n*Customer:* {{ $json.customer_name }} ({{ $json.customer_email || $json.customer_phone }})\\n*Subject:* {{ $json.subject }}\\nPlease action this ticket directly.",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        368,
+        480
+      ],
+      "id": "2bb86520-a09c-421d-881b-1c8ff4e0937b",
+      "name": "Slack — Escalate",
+      "webhookId": "82d1ffba-d0ef-4369-9748-18017b1550d5",
+      "credentials": {
+        "slackApi": {
+          "id": "4qvC7OnRRv7VPzVg",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0AS3SU1HKM",
+          "mode": "list",
+          "cachedResultName": "customer-support-ticket-management"
+        },
+        "text": "=:white_check_mark: Ticket `{{ $json.ticket_id }}` resolved — reply sent via {{ $json.send_channel }}{{ $json.modified ? ' (reply was edited by agent)' : ' (AI draft sent as-is)' }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        1456,
+        496
+      ],
+      "id": "b12310aa-48cb-46ef-88b8-92568f67023e",
+      "name": "Slack — Ticket Resolved",
+      "webhookId": "82d1ffba-d0ef-4369-9748-18017b1550d5",
+      "credentials": {
+        "slackApi": {
+          "id": "4qvC7OnRRv7VPzVg",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "triggerOn": "specificFolder",
+        "folderToWatch": {
+          "__rl": true,
+          "value": "1pZ2ialMsDE5IvcgNBH_LDWXlveMJcdmX",
+          "mode": "id"
+        },
+        "event": "fileCreated",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [
+        2912,
+        0
+      ],
+      "id": "6f3c070c-e8eb-4883-866d-766230e84c64",
+      "name": "Google Drive Trigger",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "FcQm6iJYGdIRhOM0",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3312,
+        0
+      ],
+      "id": "f87d8d2a-fe6c-4d9f-885f-6102273c874f",
+      "name": "Download Support Doc from Drive",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "FcQm6iJYGdIRhOM0",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "dimensions": 1024
+        }
+      },
+      "type": "n8n-nodes-gemini-embedding-plus.embeddingsGoogleGeminiPlus",
+      "typeVersion": 1,
+      "position": [
+        3392,
+        448
+      ],
+      "id": "af9ec9b6-f391-4c5d-90ec-efd1e463488e",
+      "name": "Embeddings Google Gemini Plus",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Ah3AyC6bmcvPBNXi",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0AS3SU1HKM",
+          "mode": "list",
+          "cachedResultName": "customer-support-ticket-management"
+        },
+        "text": ":books: Support knowledge base re-ingested into Pinecone successfully. AI agent will use the updated document from now on.",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        4256,
+        0
+      ],
+      "id": "308cfe99-6725-4a3f-b614-af0866894918",
+      "name": "Slack — KB Updated",
+      "webhookId": "82d1ffba-d0ef-4369-9748-18017b1550d5",
+      "credentials": {
+        "slackApi": {
+          "id": "4qvC7OnRRv7VPzVg",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "dimensions": 1024
+        }
+      },
+      "type": "n8n-nodes-gemini-embedding-plus.embeddingsGoogleGeminiPlus",
+      "typeVersion": 1,
+      "position": [
+        3104,
+        -608
+      ],
+      "id": "e351ddf2-1555-43ee-93f5-4ae71622f4a0",
+      "name": "Embeddings Google Gemini Plus1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Ah3AyC6bmcvPBNXi",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Support Docs Updates in RAG Pipeline",
+        "height": 1088,
+        "width": 2496,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2336,
+        -240
+      ],
+      "id": "3f955760-9b58-45e2-93fe-12d15346c5f7",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0AS3SU1HKM",
+          "mode": "list",
+          "cachedResultName": "customer-support-ticket-management"
+        },
+        "text": "={{ $json.slack_msg }}",
+        "otherOptions": {
+          "unfurl_links": false,
+          "unfurl_media": false
+        }
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        4112,
+        -1024
+      ],
+      "id": "567e7461-1edc-400b-928a-458c2de4b502",
+      "name": "Slack #support-review",
+      "webhookId": "7313060f-b9d8-4a69-a24c-b4c0291a0526",
+      "credentials": {
+        "slackApi": {
+          "id": "4qvC7OnRRv7VPzVg",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "order",
+        "operation": "get",
+        "orderId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Order_ID', ``, 'string') }}"
+      },
+      "type": "n8n-nodes-base.wooCommerceTool",
+      "typeVersion": 1,
+      "position": [
+        3456,
+        -816
+      ],
+      "id": "2d8c743e-e4d0-4548-80ac-a47b535f9e84",
+      "name": "Tool — WooCommerce Order Lookup",
+      "credentials": {
+        "wooCommerceApi": {
+          "id": "qpVE8B0a04QnMPQV",
+          "name": "SAH Kitchen Woo"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        2752,
+        -816
+      ],
+      "id": "0879aeaa-9d68-4bc5-8dd0-24e883615350",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "idsnxZsyUpzZmKPC",
+          "name": "OpenRouter account"
+        }
+      }
+    }
+  ],
+  "pinData": {
+    "Google Drive Trigger": [
+      {
+        "json": {
+          "parents": [
+            "1pZ2ialMsDE5IvcgNBH_LDWXlveMJcdmX"
+          ],
+          "lastModifyingUser": {
+            "displayName": "Sonu Gupta",
+            "kind": "drive#user",
+            "me": true,
+            "permissionId": "01843494516215510120",
+            "emailAddress": "tanisitech@gmail.com",
+            "photoLink": "https://lh3.googleusercontent.com/a/ACg8ocLytMDexb99ChgZqpNl6yfCK4DqgZy63WbAP1diZyab3N-wIh0=s64"
+          },
+          "owners": [
+            {
+              "displayName": "Sonu Gupta",
+              "kind": "drive#user",
+              "me": true,
+              "permissionId": "01843494516215510120",
+              "emailAddress": "tanisitech@gmail.com",
+              "photoLink": "https://lh3.googleusercontent.com/a/ACg8ocLytMDexb99ChgZqpNl6yfCK4DqgZy63WbAP1diZyab3N-wIh0=s64"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "drive#permission",
+              "id": "01843494516215510120",
+              "type": "user",
+              "emailAddress": "tanisitech@gmail.com",
+              "role": "owner",
+              "displayName": "Sonu Gupta",
+              "photoLink": "https://lh3.googleusercontent.com/a/ACg8ocLytMDexb99ChgZqpNl6yfCK4DqgZy63WbAP1diZyab3N-wIh0=s64",
+              "deleted": false,
+              "pendingOwner": false
+            }
+          ],
+          "spaces": [
+            "drive"
+          ],
+          "capabilities": {
+            "canAcceptOwnership": false,
+            "canAddChildren": false,
+            "canAddMyDriveParent": false,
+            "canChangeCopyRequiresWriterPermission": true,
+            "canChangeItemDownloadRestriction": true,
+            "canChangeSecurityUpdateEnabled": false,
+            "canChangeViewersCanCopyContent": true,
+            "canComment": true,
+            "canCopy": true,
+            "canDelete": true,
+            "canDisableInheritedPermissions": false,
+            "canDownload": true,
+            "canEdit": true,
+            "canEnableInheritedPermissions": true,
+            "canListChildren": false,
+            "canModifyContent": true,
+            "canModifyContentRestriction": true,
+            "canModifyEditorContentRestriction": true,
+            "canModifyOwnerContentRestriction": true,
+            "canModifyLabels": false,
+            "canMoveChildrenWithinDrive": false,
+            "canMoveItemIntoTeamDrive": true,
+            "canMoveItemOutOfDrive": true,
+            "canMoveItemWithinDrive": true,
+            "canReadLabels": false,
+            "canReadRevisions": true,
+            "canRemoveChildren": false,
+            "canRemoveContentRestriction": false,
+            "canRemoveMyDriveParent": true,
+            "canRename": true,
+            "canShare": true,
+            "canTrash": true,
+            "canUntrash": true
+          },
+          "permissionIds": [
+            "01843494516215510120"
+          ],
+          "linkShareMetadata": {
+            "securityUpdateEligible": false,
+            "securityUpdateEnabled": true
+          },
+          "downloadRestrictions": {
+            "itemDownloadRestriction": {
+              "restrictedForReaders": false,
+              "restrictedForWriters": false
+            },
+            "effectiveDownloadRestrictionWithContext": {
+              "restrictedForReaders": false,
+              "restrictedForWriters": false
+            }
+          },
+          "kind": "drive#file",
+          "id": "145UlQJowuGnS00BGB-HPzOcmbVYz-KtY",
+          "name": "SAH_Kitchen_Equipment_Knowledge_Base.pdf",
+          "mimeType": "application/pdf",
+          "starred": false,
+          "trashed": false,
+          "explicitlyTrashed": false,
+          "version": "3",
+          "webContentLink": "https://drive.google.com/uc?id=145UlQJowuGnS00BGB-HPzOcmbVYz-KtY&export=download",
+          "webViewLink": "https://drive.google.com/file/d/145UlQJowuGnS00BGB-HPzOcmbVYz-KtY/view?usp=drivesdk",
+          "iconLink": "https://drive-thirdparty.googleusercontent.com/16/type/application/pdf",
+          "hasThumbnail": true,
+          "thumbnailLink": "https://lh3.googleusercontent.com/drive-storage/AJQWtBN3MZOF4z88DW4qTOTChYlGnzXSJoYj4uzlw6vlF4pbc44obX2VlSH57Them6qGW9cTFv_aINGeMOSoAKTVmoswe_vDmVh4SB2rViQkFpFX8fN4Ow=s220",
+          "thumbnailVersion": "1",
+          "viewedByMe": true,
+          "viewedByMeTime": "2026-04-12T09:23:16.619Z",
+          "createdTime": "2026-04-12T09:23:16.619Z",
+          "modifiedTime": "2026-04-12T09:19:30.000Z",
+          "modifiedByMeTime": "2026-04-12T09:19:30.000Z",
+          "modifiedByMe": true,
+          "shared": false,
+          "ownedByMe": true,
+          "viewersCanCopyContent": true,
+          "copyRequiresWriterPermission": false,
+          "writersCanShare": true,
+          "originalFilename": "SAH_Kitchen_Equipment_Knowledge_Base.pdf",
+          "fullFileExtension": "pdf",
+          "fileExtension": "pdf",
+          "md5Checksum": "b095698b3e0d033b7798b51d2fff6c5b",
+          "sha1Checksum": "eea7cff697c15c1ff49edc57446ecc6036c3a3b1",
+          "sha256Checksum": "43bc0aee1234096665549365eb84380efd2575e08bbfe8eaf1d34d45a36bba38",
+          "size": "552909",
+          "quotaBytesUsed": "552909",
+          "headRevisionId": "0Bx0GnyM2bCZIQTM1TGJ5Q0JTaDdqbzZEVllaSnJqVzF5R3hnPQ",
+          "isAppAuthorized": false,
+          "inheritedPermissionsDisabled": false
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Gmail Trigger — Support Inbox": {
+      "main": [
+        [
+          {
+            "node": "Extract Gmail Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Gmail Fields": {
+      "main": [
+        [
+          {
+            "node": "Normalise Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Typeform Fields": {
+      "main": [
+        [
+          {
+            "node": "Normalise Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract WhatsApp Fields": {
+      "main": [
+        [
+          {
+            "node": "Normalise Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tally / Generic Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Webhook Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Webhook Fields": {
+      "main": [
+        [
+          {
+            "node": "Normalise Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise Ticket": {
+      "main": [
+        [
+          {
+            "node": "Valid Ticket?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Ticket?": {
+      "main": [
+        [
+          {
+            "node": "Read Recent Tickets",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip — Invalid or Non-Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Recent Tickets": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Build Ack Message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Ticket to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Ack Message": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Send Email Ack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send WhatsApp Ack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email Ack": {
+      "main": [
+        [
+          {
+            "node": "Is New (not duplicate)?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WhatsApp Ack": {
+      "main": [
+        [
+          {
+            "node": "Is New (not duplicate)?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is New (not duplicate)?": {
+      "main": [
+        [
+          {
+            "node": "Validate & Prepare Agent Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack — Duplicate Notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Prepare Agent Input": {
+      "main": [
+        [
+          {
+            "node": "AI Support Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Support Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Agent Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Window Buffer Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Support Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinecone — Support KB": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Support Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Agent Output": {
+      "main": [
+        [
+          {
+            "node": "Update Ticket — AI Processed",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to AI Log Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Is Critical (Urgency 1)?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack #support-review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Critical (Urgency 1)?": {
+      "main": [
+        [
+          {
+            "node": "Slack #support-escalations (Critical)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool — WooCommerce Product Search": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Support Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool — Customer Order History": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Support Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Action": {
+      "main": [
+        [
+          {
+            "node": "Route Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Action": {
+      "main": [
+        [
+          {
+            "node": "Prepare Send (as-is)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond — Edit Form",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack — Escalate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Send (as-is)": {
+      "main": [
+        [
+          {
+            "node": "Send via Email or WhatsApp?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Submit Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Edited Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Edited Reply": {
+      "main": [
+        [
+          {
+            "node": "Send via Email or WhatsApp?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send via Email or WhatsApp?": {
+      "main": [
+        [
+          {
+            "node": "Send Reply via Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Reply via WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reply via Email": {
+      "main": [
+        [
+          {
+            "node": "Mark Ticket Resolved",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Resolution",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond — Reply Sent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack — Ticket Resolved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reply via WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Mark Ticket Resolved",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Resolution",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond — Reply Sent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack — Ticket Resolved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Ticket Escalated": {
+      "main": [
+        [
+          {
+            "node": "Respond — Escalated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Pinecone — Upsert Documents",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recursive Character Splitter": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Default Data Loader",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinecone — Upsert Documents": {
+      "main": [
+        [
+          {
+            "node": "Slack — KB Updated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Typeform Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Typeform Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract WhatsApp Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "Slack — Escalate": {
+      "main": [
+        [
+          {
+            "node": "Mark Ticket Escalated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive Trigger": {
+      "main": [
+        [
+          {
+            "node": "Download Support Doc from Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Support Doc from Drive": {
+      "main": [
+        [
+          {
+            "node": "Pinecone — Upsert Documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Google Gemini Plus": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Pinecone — Upsert Documents",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Google Gemini Plus1": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Pinecone — Support KB",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool — WooCommerce Order Lookup": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Support Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Support Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "D1jfKw49MwT3a-38wbNfM",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "59d335e2-16ce-480f-b08d-ed8dce0bae6d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "37ee74431af36e5f6e2177b0b6e0ba77f82f98e5f13559f1dbfcc6190c6b5601"
+  },
+  "id": "_EzoGGRqWP231qtOcKd9m",
+  "tags": [
+    {
+      "updatedAt": "2026-04-13T07:52:32.358Z",
+      "createdAt": "2026-04-13T07:52:32.358Z",
+      "id": "4mceyfyY4pgewdBI",
+      "name": "Customer Support Ticket"
+    }
+  ]
+}
